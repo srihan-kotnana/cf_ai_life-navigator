@@ -22,3 +22,5 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 git clone https://github.com/<your-username>/cf_ai_life-navigator.git
 cd cf_ai_life-navigator/apps/worker
 npm install
+wragler login
+wrangler dev # should return a localhost URL
