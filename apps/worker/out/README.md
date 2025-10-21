@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "life-navigator-v3" generated at 2025-10-21T01:01:25.971Z.

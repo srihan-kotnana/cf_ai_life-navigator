@@ -1,0 +1,22 @@
+name = "life-navigator-v5"
+main = "src/index.ts"
+compatibility_date = "2025-10-21"
+
+[durable_objects]
+bindings = [
+  { name = "SESSION_DO", class_name = "SessionDO" }
+]
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "life-nav-index"
+
+[ai]
+binding = "AI"
+
+[vars]
+MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SessionDO"]
