@@ -2,9 +2,6 @@ const chat = document.getElementById("chat");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 
-// const API = "http://127.0.0.1:8787"; // local worker URL
-const API = "https://life-navigator.kotnana-srihan.workers.dev/";
-
 function addMessage(role, text, meta = "") {
   const div = document.createElement("div");
   div.className = role;
@@ -17,10 +14,9 @@ function addMessage(role, text, meta = "") {
     div.appendChild(tag);
   }
 
-  // convert \n to <br>
   const body = document.createElement("div");
   body.className = "text";
-  body.innerHTML = (text || "").replace(/\n/g, "<br>");
+  body.textContent = text || "";
   div.appendChild(body);
 
   chat.appendChild(div);
@@ -36,10 +32,18 @@ async function tryParseJson(res) {
   }
 }
 
+async function requestJson(path, options) {
+  const res = await fetch(path, options);
+  const data = await tryParseJson(res);
+  if (!res.ok) {
+    throw new Error(data.message || `request failed (${res.status})`);
+  }
+  return data;
+}
+
 async function fetchPlan() {
   try {
-    const res = await fetch(`${API}/api/plan`);
-    const data = await tryParseJson(res);
+    const data = await requestJson("/api/plan");
 
     if (data?.weekStart) {
       addMessage("system", `📅 current plan loaded (${data.weekStart})`);
@@ -70,13 +74,11 @@ form.addEventListener("submit", async (e) => {
   input.value = "";
 
   try {
-    const res = await fetch(`${API}/api/message`, {
+    const data = await requestJson("/api/message", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, sessionId: "demo-user" }),
     });
-
-    const data = await tryParseJson(res);
 
     const meta =
       data.kind === "reflection"

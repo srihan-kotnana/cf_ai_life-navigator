@@ -15,12 +15,22 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 
 ---
 
-##  setup
+## setup
 
 ### clone & install
 ```bash
-git clone https://github.com/<your-username>/cf_ai_life-navigator.git
+git clone https://github.com/srihan-kotnana/cf_ai_life-navigator.git
 cd cf_ai_life-navigator/apps/worker
 npm install
-wragler login
-wrangler dev # should return a localhost URL
+npm run dev
+```
+
+The Worker serves both the web app and its `/api/*` routes from the same origin.
+
+### validation
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```

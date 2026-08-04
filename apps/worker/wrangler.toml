@@ -2,6 +2,10 @@ name = "life-navigator-v5"
 main = "src/index.ts"
 compatibility_date = "2025-10-21"
 
+[assets]
+directory = "../web"
+run_worker_first = [ "/api/*" ]
+
 [durable_objects]
 bindings = [
   { name = "SESSION_DO", class_name = "SessionDO" }
