@@ -63,6 +63,22 @@ button {
   cursor: pointer;
 }
 
+.privacy-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.privacy-actions button {
+  font-size: 0.8rem;
+  color: #bbb;
+}
+
+.privacy-actions .danger {
+  color: #ff9b9b;
+}
+
 
 .meta {
   font-size: 0.75rem;

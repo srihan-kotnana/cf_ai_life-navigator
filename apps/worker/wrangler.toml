@@ -21,6 +21,22 @@ binding = "AI"
 [vars]
 MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
+[[ratelimits]]
+name = "API_RATE_LIMITER"
+namespace_id = "10001"
+
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+[[ratelimits]]
+name = "AI_RATE_LIMITER"
+namespace_id = "10002"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionDO"]

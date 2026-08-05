@@ -1,3 +1,9 @@
+import {
+  authenticateRequest,
+  AuthError,
+  type AuthEnv,
+  type AuthenticatedUser,
+} from "./auth";
 import { SessionDO } from "./do_session";
 
 type MessageKind = "reflection" | "plan_request" | "other";
@@ -23,11 +29,13 @@ interface AIClient {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
-export interface Env {
+export interface Env extends AuthEnv {
   AI: AIClient;
   MODEL: string;
   VECTOR_INDEX: VectorizeIndex;
   SESSION_DO: DurableObjectNamespace;
+  API_RATE_LIMITER: RateLimit;
+  AI_RATE_LIMITER: RateLimit;
 }
 
 class HttpError extends Error {
@@ -35,6 +43,7 @@ class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
@@ -47,11 +56,7 @@ const INTENT_SCHEMA = {
       type: "string",
       enum: ["reflection", "plan_request", "other"],
     },
-    mood: {
-      type: "number",
-      minimum: 0,
-      maximum: 1,
-    },
+    mood: { type: "number", minimum: 0, maximum: 1 },
   },
   required: ["kind", "mood"],
   additionalProperties: false,
@@ -90,12 +95,17 @@ const SYSTEM = `You are a pragmatic, conversational planner.
 Respond naturally in plain-text paragraphs. Be concrete and realistic.
 Do not claim to provide medical or mental-health treatment.`;
 
-function json(body: unknown, status = 200) {
+function json(
+  body: unknown,
+  status = 200,
+  additionalHeaders: Record<string, string> = {},
+) {
   return Response.json(body, {
     status,
     headers: {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
+      ...additionalHeaders,
     },
   });
 }
@@ -103,7 +113,6 @@ function json(body: unknown, status = 200) {
 export function unwrapAIResponse(result: unknown): unknown {
   if (typeof result === "string") return result;
   if (!result || typeof result !== "object") return null;
-
   const response = result as Record<string, unknown>;
   return (
     response.response ??
@@ -129,7 +138,6 @@ export function parseIntentResponse(result: unknown): Intent {
     typeof parsed?.mood === "number" && Number.isFinite(parsed.mood)
       ? Math.min(1, Math.max(0, parsed.mood))
       : 0.5;
-
   return { kind, mood };
 }
 
@@ -158,7 +166,6 @@ export function parsePlanResponse(result: unknown): Plan | null {
     ) {
       return null;
     }
-
     days.push({
       day: candidate.day,
       focus: candidate.focus,
@@ -173,10 +180,14 @@ export function parsePlanResponse(result: unknown): Plan | null {
   };
 }
 
-async function handleMessage(req: Request, env: Env) {
-  const { text, sessionId } = await readMessage(req);
-  const id = env.SESSION_DO.idFromName(sessionId);
-  const stub = env.SESSION_DO.get(id);
+async function handleMessage(
+  req: Request,
+  env: Env,
+  user: AuthenticatedUser,
+) {
+  await enforceRateLimit(env.AI_RATE_LIMITER, user.id, "ai");
+  const { text } = await readMessage(req);
+  const stub = getUserStub(env, user.id);
   const state = (await (await stub.fetch("https://do/load")).json()) as {
     persona: unknown;
     plan: unknown;
@@ -214,13 +225,30 @@ async function handleMessage(req: Request, env: Env) {
       );
     }
 
+    const vectorId = crypto.randomUUID();
+    const createdAt = Date.now();
     await env.VECTOR_INDEX.upsert([
       {
-        id: crypto.randomUUID(),
+        id: vectorId,
+        namespace: user.id,
         values,
-        metadata: { ts: Date.now(), mood: intent.mood, sessionId },
+        metadata: { createdAt, mood: intent.mood },
       },
     ]);
+
+    const recordResult = (await (
+      await stub.fetch("https://do/record-reflection", {
+        method: "POST",
+        body: JSON.stringify({ id: vectorId, createdAt }),
+      })
+    ).json()) as { pendingVectorIds?: string[] };
+    if (recordResult.pendingVectorIds?.length) {
+      await env.VECTOR_INDEX.deleteByIds(recordResult.pendingVectorIds);
+      await stub.fetch("https://do/ack-vector-deletes", {
+        method: "POST",
+        body: JSON.stringify({ ids: recordResult.pendingVectorIds }),
+      });
+    }
 
     const persona = isObject(state.persona) ? state.persona : {};
     await stub.fetch("https://do/save-persona", {
@@ -272,12 +300,7 @@ async function handleMessage(req: Request, env: Env) {
       method: "POST",
       body: JSON.stringify(plan),
     });
-
-    return json({
-      kind: "plan_request",
-      text: plan.summary,
-      plan,
-    });
+    return json({ kind: "plan_request", text: plan.summary, plan });
   }
 
   const chatReply = await env.AI.run(env.MODEL, {
@@ -296,34 +319,49 @@ async function handleMessage(req: Request, env: Env) {
       "The assistant did not return a response. Please try again.",
     );
   }
-
   return json({ kind: "other", text: replyText });
 }
 
 async function handleRequest(req: Request, env: Env) {
   const url = new URL(req.url);
+  if (!url.pathname.startsWith("/api/")) {
+    return new Response("Not found", { status: 404 });
+  }
+
+  const user = await authenticateRequest(req, env);
+  await enforceRateLimit(env.API_RATE_LIMITER, user.id, "api");
 
   if (req.method === "POST" && url.pathname === "/api/message") {
-    return handleMessage(req, env);
+    return handleMessage(req, env, user);
   }
 
   if (req.method === "GET" && url.pathname === "/api/plan") {
-    const sessionId = validateSessionId(
-      url.searchParams.get("sessionId") ?? "demo-user",
+    const state = (await (
+      await getUserStub(env, user.id).fetch("https://do/load")
+    ).json()) as { plan?: unknown };
+    return json(
+      state.plan ?? { note: "No plan yet. Ask for one to get started." },
     );
-    const id = env.SESSION_DO.idFromName(sessionId);
-    const stub = env.SESSION_DO.get(id);
-    const state = (await (await stub.fetch("https://do/load")).json()) as {
-      plan?: unknown;
-    };
-    return json(state.plan ?? { note: "No plan yet. Ask for one to get started." });
   }
 
-  if (url.pathname.startsWith("/api/")) {
-    throw new HttpError(404, "not_found", "API route not found.");
+  if (req.method === "GET" && url.pathname === "/api/data") {
+    const response = await getUserStub(env, user.id).fetch("https://do/export");
+    return json(await response.json());
   }
 
-  return new Response("Not found", { status: 404 });
+  if (req.method === "DELETE" && url.pathname === "/api/data") {
+    const stub = getUserStub(env, user.id);
+    const snapshot = (await (
+      await stub.fetch("https://do/vector-ids")
+    ).json()) as { vectorIds?: string[] };
+    if (snapshot.vectorIds?.length) {
+      await env.VECTOR_INDEX.deleteByIds(snapshot.vectorIds);
+    }
+    await stub.fetch("https://do/reset", { method: "DELETE" });
+    return json({ deleted: true });
+  }
+
+  throw new HttpError(404, "not_found", "API route not found.");
 }
 
 export default {
@@ -331,8 +369,12 @@ export default {
     try {
       return await handleRequest(req, env);
     } catch (error) {
-      if (error instanceof HttpError) {
-        return json({ error: error.code, message: error.message }, error.status);
+      if (error instanceof AuthError || error instanceof HttpError) {
+        return json(
+          { error: error.code, message: error.message },
+          error.status,
+          error instanceof HttpError ? error.headers : {},
+        );
       }
 
       console.error("Unhandled request error", error);
@@ -345,50 +387,34 @@ export default {
       );
     }
   },
-
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
-    console.log("Running scheduled plan refresh");
-
-    const sessionId = "demo-user";
-    const id = env.SESSION_DO.idFromName(sessionId);
-    const stub = env.SESSION_DO.get(id);
-    const { persona, plan } = (await (
-      await stub.fetch("https://do/load")
-    ).json()) as { persona: unknown; plan: unknown };
-
-    // Phase 3 will replace this placeholder retrieval with embedded, user-scoped
-    // reflection recall and configure the scheduler that invokes this handler.
-    const result = await env.AI.run(env.MODEL, {
-      messages: [
-        {
-          role: "system",
-          content: "Refresh the user's practical seven-day plan.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({ persona, previousPlan: plan }),
-        },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: PLAN_SCHEMA,
-      },
-      max_tokens: 900,
-      temperature: 0.5,
-    });
-
-    const refreshedPlan = parsePlanResponse(result);
-    if (!refreshedPlan) {
-      console.error("Scheduled planner returned an invalid plan");
-      return;
-    }
-
-    await stub.fetch("https://do/save-plan", {
-      method: "POST",
-      body: JSON.stringify(refreshedPlan),
-    });
-  },
 };
+
+function getUserStub(env: Env, userId: string) {
+  return env.SESSION_DO.get(env.SESSION_DO.idFromName(userId));
+}
+
+async function enforceRateLimit(
+  limiter: RateLimit | undefined,
+  userId: string,
+  scope: string,
+) {
+  if (!limiter) {
+    throw new HttpError(
+      503,
+      "rate_limit_not_configured",
+      "Request protection is not configured.",
+    );
+  }
+  const { success } = await limiter.limit({ key: `${scope}:${userId}` });
+  if (!success) {
+    throw new HttpError(
+      429,
+      "rate_limited",
+      "Too many requests. Please wait before trying again.",
+      { "retry-after": "60" },
+    );
+  }
+}
 
 async function readMessage(req: Request) {
   if (!req.headers.get("content-type")?.toLowerCase().includes("application/json")) {
@@ -405,7 +431,6 @@ async function readMessage(req: Request) {
   } catch {
     throw new HttpError(400, "invalid_json", "Request body must be valid JSON.");
   }
-
   if (!isObject(body) || typeof body.text !== "string") {
     throw new HttpError(400, "invalid_text", "A text message is required.");
   }
@@ -418,28 +443,12 @@ async function readMessage(req: Request) {
       "Text must contain between 1 and 4,000 characters.",
     );
   }
-
-  const sessionId = validateSessionId(
-    typeof body.sessionId === "string" ? body.sessionId : "demo-user",
-  );
-  return { text, sessionId };
-}
-
-function validateSessionId(value: string) {
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(value)) {
-    throw new HttpError(
-      400,
-      "invalid_session",
-      "Session ID contains unsupported characters.",
-    );
-  }
-  return value;
+  return { text };
 }
 
 function parseObject(value: unknown): Record<string, any> | null {
   if (isObject(value)) return value;
   if (typeof value !== "string") return null;
-
   const trimmed = value.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? trimmed;
   try {

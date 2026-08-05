@@ -1,3 +1,11 @@
+const MAX_REFLECTIONS = 50;
+const REFLECTION_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+
+interface ReflectionRecord {
+  id: string;
+  createdAt: number;
+}
+
 export class SessionDO {
   state: DurableObjectState;
   storage: DurableObjectStorage;
@@ -10,38 +18,135 @@ export class SessionDO {
   async fetch(req: Request) {
     const url = new URL(req.url);
 
-    // load current persona + plan
-    if (url.pathname.endsWith("/load")) {
-      const persona = (await this.storage.get("persona")) ?? defaultPersona();
-      const plan = (await this.storage.get("plan")) ?? null;
-      return Response.json({ persona, plan });
+    if (req.method === "GET" && url.pathname.endsWith("/load")) {
+      return Response.json(await this.loadState());
     }
 
-    // save persona
-    if (url.pathname.endsWith("/save-persona")) {
-      const p = await req.json();
-      await this.storage.put("persona", p);
+    if (req.method === "POST" && url.pathname.endsWith("/save-persona")) {
+      await this.storage.put("persona", await req.json());
       return Response.json({ ok: true });
     }
 
-    // save plan
-    if (url.pathname.endsWith("/save-plan")) {
-      const plan = await req.json();
-      await this.storage.put("plan", plan);
+    if (req.method === "POST" && url.pathname.endsWith("/save-plan")) {
+      await this.storage.put("plan", await req.json());
       return Response.json({ ok: true });
     }
 
-    // clear stored state (debug helper)
-    if (url.pathname.endsWith("/reset")) {
+    if (req.method === "POST" && url.pathname.endsWith("/record-reflection")) {
+      const body = (await req.json()) as Partial<ReflectionRecord>;
+      if (
+        typeof body.id !== "string" ||
+        !body.id ||
+        typeof body.createdAt !== "number" ||
+        !Number.isFinite(body.createdAt)
+      ) {
+        return Response.json({ error: "invalid_record" }, { status: 400 });
+      }
+
+      const records = await this.getReflectionRecords();
+      const cutoff = Date.now() - REFLECTION_RETENTION_MS;
+      const retained: ReflectionRecord[] = [];
+      const expiredVectorIds: string[] = [];
+
+      for (const record of records) {
+        if (record.createdAt < cutoff) expiredVectorIds.push(record.id);
+        else retained.push(record);
+      }
+
+      retained.push({ id: body.id, createdAt: body.createdAt });
+      retained.sort((left, right) => left.createdAt - right.createdAt);
+      while (retained.length > MAX_REFLECTIONS) {
+        const expired = retained.shift();
+        if (expired) expiredVectorIds.push(expired.id);
+      }
+
+      await this.storage.put("reflectionRecords", retained);
+      const pendingVectorIds = [
+        ...new Set([
+          ...(await this.getPendingVectorDeletes()),
+          ...expiredVectorIds,
+        ]),
+      ];
+      await this.storage.put("pendingVectorDeletes", pendingVectorIds);
+      return Response.json({
+        pendingVectorIds,
+      });
+    }
+
+    if (req.method === "POST" && url.pathname.endsWith("/ack-vector-deletes")) {
+      const body = (await req.json()) as { ids?: unknown };
+      if (!Array.isArray(body.ids) || !body.ids.every((id) => typeof id === "string")) {
+        return Response.json({ error: "invalid_ids" }, { status: 400 });
+      }
+      const acknowledged = new Set(body.ids);
+      const pending = (await this.getPendingVectorDeletes()).filter(
+        (id) => !acknowledged.has(id),
+      );
+      await this.storage.put("pendingVectorDeletes", pending);
+      return Response.json({ ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname.endsWith("/vector-ids")) {
+      const records = await this.getReflectionRecords();
+      const pending = await this.getPendingVectorDeletes();
+      return Response.json({
+        vectorIds: [
+          ...new Set([...records.map((record) => record.id), ...pending]),
+        ],
+      });
+    }
+
+    if (req.method === "GET" && url.pathname.endsWith("/export")) {
+      const state = await this.loadState();
+      return Response.json({
+        persona: state.persona,
+        plan: state.plan,
+        reflections: state.reflections.map((record) => ({
+          createdAt: record.createdAt,
+        })),
+        privacy: {
+          reflectionRetentionDays: 90,
+          maximumStoredReflections: MAX_REFLECTIONS,
+        },
+        exportedAt: new Date().toISOString(),
+      });
+    }
+
+    if (req.method === "DELETE" && url.pathname.endsWith("/reset")) {
       await this.storage.deleteAll();
-      return Response.json({ ok: true, reset: true });
+      return Response.json({ ok: true });
     }
 
-    return new Response("noop");
+    return Response.json({ error: "not_found" }, { status: 404 });
+  }
+
+  private async loadState() {
+    const persona =
+      (await this.storage.get("persona")) ?? defaultPersona();
+    const plan = (await this.storage.get("plan")) ?? null;
+    const reflections = await this.getReflectionRecords();
+    return { persona, plan, reflections };
+  }
+
+  private async getReflectionRecords(): Promise<ReflectionRecord[]> {
+    const value = await this.storage.get<ReflectionRecord[]>("reflectionRecords");
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (record) =>
+        record &&
+        typeof record.id === "string" &&
+        typeof record.createdAt === "number" &&
+        Number.isFinite(record.createdAt),
+    );
+  }
+
+  private async getPendingVectorDeletes(): Promise<string[]> {
+    const value = await this.storage.get<unknown[]>("pendingVectorDeletes");
+    if (!Array.isArray(value)) return [];
+    return value.filter((id): id is string => typeof id === "string" && Boolean(id));
   }
 }
 
-// default persona values if nothing stored yet
 function defaultPersona() {
   return {
     energy: 0.5,
@@ -50,16 +155,4 @@ function defaultPersona() {
     goals: [],
     preferences: {},
   };
-}
-
-// universal extractor for model responses
-export function getText(aiResult: any): string {
-  if (!aiResult) return "";
-  return (
-    aiResult.output_text ??
-    aiResult.response ??
-    aiResult.text ??
-    aiResult.result ??
-    (typeof aiResult === "string" ? aiResult : "")
-  );
 }

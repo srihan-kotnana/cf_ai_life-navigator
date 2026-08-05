@@ -34,3 +34,31 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## authentication and privacy
+
+Production API routes fail closed unless protected by Cloudflare Access. Configure
+an Access application for the deployed Worker, then set its team domain and
+Application Audience (AUD) tag:
+
+```bash
+cd apps/worker
+wrangler secret put TEAM_DOMAIN
+wrangler secret put POLICY_AUD
+```
+
+`TEAM_DOMAIN` must look like `https://your-team.cloudflareaccess.com`. The Worker
+validates the `Cf-Access-Jwt-Assertion` signature, issuer, and audience before
+deriving a non-reversible per-user storage identifier.
+
+For local development only:
+
+```bash
+cp .dev.vars.example .dev.vars
+npm run dev
+```
+
+Reflections are isolated by user, limited to 50 records, and retained for at most
+90 days when new reflections are recorded. The web app provides data export and
+deletion controls. API requests and AI calls are rate-limited per authenticated
+user.

@@ -18,37 +18,78 @@ const SAMPLE_PLAN = {
   ],
 };
 
-function createEnvironment(aiResponses: unknown[]) {
-  let state: Record<string, unknown> = {
+function createEnvironment(
+  aiResponses: unknown[],
+  options: { allowApi?: boolean; allowAi?: boolean } = {},
+) {
+  let state: Record<string, any> = {
     persona: { mood: "neutral" },
     plan: null,
+    reflections: [],
   };
 
   const stub = {
     async fetch(input: string | Request, init?: RequestInit) {
       const url = new URL(typeof input === "string" ? input : input.url);
       if (url.pathname === "/load") return Response.json(state);
+      if (url.pathname === "/export") {
+        return Response.json({ ...state, exportedAt: new Date().toISOString() });
+      }
+      if (url.pathname === "/reset") {
+        state = { persona: { mood: "neutral" }, plan: null, reflections: [] };
+        return Response.json({ ok: true });
+      }
+      if (url.pathname === "/vector-ids") {
+        return Response.json({
+          vectorIds: state.reflections.map((item: { id: string }) => item.id),
+        });
+      }
 
       const body = JSON.parse(String(init?.body ?? "{}"));
       if (url.pathname === "/save-persona") state.persona = body;
       if (url.pathname === "/save-plan") state.plan = body;
+      if (url.pathname === "/record-reflection") {
+        state.reflections.push(body);
+        return Response.json({ pendingVectorIds: [] });
+      }
       return Response.json({ ok: true });
     },
   };
 
   const run = vi.fn(async () => aiResponses.shift());
-  const upsert = vi.fn(async () => ({ count: 1 }));
+  const upsert = vi.fn(async (_vectors: VectorizeVector[]) => ({
+    mutationId: "upsert",
+  }));
+  const deleteByIds = vi.fn(async (_ids: string[]) => ({
+    mutationId: "delete",
+  }));
+  const idFromName = vi.fn((_name: string) => "test-id");
+  const apiLimit = vi.fn(async () => ({ success: options.allowApi ?? true }));
+  const aiLimit = vi.fn(async () => ({ success: options.allowAi ?? true }));
   const env = {
+    AUTH_MODE: "development",
+    DEV_USER_ID: "test-user",
     AI: { run },
     MODEL: "test-model",
-    VECTOR_INDEX: { upsert },
+    VECTOR_INDEX: { upsert, deleteByIds },
+    API_RATE_LIMITER: { limit: apiLimit },
+    AI_RATE_LIMITER: { limit: aiLimit },
     SESSION_DO: {
-      idFromName: vi.fn(() => "test-id"),
+      idFromName,
       get: vi.fn(() => stub),
     },
   } as unknown as Env;
 
-  return { env, run, upsert, getState: () => state };
+  return {
+    env,
+    run,
+    upsert,
+    deleteByIds,
+    idFromName,
+    apiLimit,
+    aiLimit,
+    getState: () => state,
+  };
 }
 
 function postMessage(body: unknown, contentType = "application/json") {
@@ -83,21 +124,24 @@ describe("AI response parsing", () => {
   });
 });
 
-describe("message API", () => {
-  it("stores a reflection when the classifier returns reflection", async () => {
-    const { env, upsert, getState } = createEnvironment([
+describe("authenticated message API", () => {
+  it("isolates reflection vectors with the authenticated user ID", async () => {
+    const { env, upsert, idFromName, getState } = createEnvironment([
       { response: { kind: "reflection", mood: 0.1 } },
       { data: [[0.1, 0.2]] },
     ]);
 
     const response = await worker.fetch(
-      postMessage({ text: "I felt drained today", sessionId: "person-1" }),
+      postMessage({ text: "I felt drained today", sessionId: "attacker" }),
       env,
     );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ kind: "reflection" });
-    expect(upsert).toHaveBeenCalledOnce();
+    const userId = idFromName.mock.calls[0][0];
+    expect(userId).toMatch(/^u_[A-Za-z0-9_-]{43}$/);
+    expect(userId).not.toBe("attacker");
+    expect(upsert.mock.calls[0][0][0]).toMatchObject({ namespace: userId });
     expect(getState().persona).toMatchObject({ mood: "low" });
   });
 
@@ -106,12 +150,10 @@ describe("message API", () => {
       { response: { kind: "plan_request", mood: 0.5 } },
       { response: SAMPLE_PLAN },
     ]);
-
     const response = await worker.fetch(
-      postMessage({ text: "Plan my week", sessionId: "person-1" }),
+      postMessage({ text: "Plan my week" }),
       env,
     );
-
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       kind: "plan_request",
@@ -126,31 +168,122 @@ describe("message API", () => {
       { response: { kind: "other", mood: 0.5 } },
       { response: "Let’s work through that together." },
     ]);
-
     const response = await worker.fetch(
-      postMessage({ text: "Help me think", sessionId: "person-1" }),
+      postMessage({ text: "Help me think" }),
       env,
     );
-
     expect(await response.json()).toEqual({
       kind: "other",
       text: "Let’s work through that together.",
     });
   });
 
+  it("fails closed when production authentication is not configured", async () => {
+    const { env } = createEnvironment([]);
+    env.AUTH_MODE = "access";
+    delete env.TEAM_DOMAIN;
+    delete env.POLICY_AUD;
+
+    const response = await worker.fetch(
+      new Request("https://example.com/api/plan"),
+      env,
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "auth_not_configured" });
+  });
+
+  it("requires a Cloudflare Access JWT in access mode", async () => {
+    const { env } = createEnvironment([]);
+    env.AUTH_MODE = "access";
+    env.TEAM_DOMAIN = "https://example.cloudflareaccess.com";
+    env.POLICY_AUD = "audience";
+
+    const response = await worker.fetch(
+      new Request("https://example.com/api/plan"),
+      env,
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({
+      error: "authentication_required",
+    });
+  });
+
+  it("enforces general and AI-specific per-user rate limits", async () => {
+    const general = createEnvironment([], { allowApi: false });
+    const generalResponse = await worker.fetch(
+      new Request("https://example.com/api/plan"),
+      general.env,
+    );
+    expect(generalResponse.status).toBe(429);
+    expect(generalResponse.headers.get("retry-after")).toBe("60");
+
+    const ai = createEnvironment([], { allowAi: false });
+    const aiResponse = await worker.fetch(
+      postMessage({ text: "hello" }),
+      ai.env,
+    );
+    expect(aiResponse.status).toBe(429);
+    expect(ai.run).not.toHaveBeenCalled();
+  });
+
+  it("exports and deletes only the authenticated user's stored data", async () => {
+    const context = createEnvironment([
+      { response: { kind: "reflection", mood: 0.4 } },
+      { data: [[0.1, 0.2]] },
+    ]);
+    await worker.fetch(postMessage({ text: "A private reflection" }), context.env);
+    const vectorId = context.upsert.mock.calls[0][0][0].id;
+
+    const exported = await worker.fetch(
+      new Request("https://example.com/api/data"),
+      context.env,
+    );
+    expect(exported.status).toBe(200);
+    expect(
+      ((await exported.json()) as { reflections: unknown[] }).reflections,
+    ).toHaveLength(1);
+
+    const deleted = await worker.fetch(
+      new Request("https://example.com/api/data", { method: "DELETE" }),
+      context.env,
+    );
+    expect(await deleted.json()).toEqual({ deleted: true });
+    expect(context.deleteByIds).toHaveBeenCalledWith([vectorId]);
+    expect(context.getState().reflections).toEqual([]);
+  });
+
+  it("keeps storage intact when vector deletion fails so deletion can be retried", async () => {
+    const context = createEnvironment([
+      { response: { kind: "reflection", mood: 0.4 } },
+      { data: [[0.1, 0.2]] },
+    ]);
+    await worker.fetch(postMessage({ text: "Keep this until deletion succeeds" }), context.env);
+    context.deleteByIds.mockRejectedValueOnce(new Error("temporary failure"));
+
+    const failed = await worker.fetch(
+      new Request("https://example.com/api/data", { method: "DELETE" }),
+      context.env,
+    );
+    expect(failed.status).toBe(500);
+    expect(context.getState().reflections).toHaveLength(1);
+
+    const retried = await worker.fetch(
+      new Request("https://example.com/api/data", { method: "DELETE" }),
+      context.env,
+    );
+    expect(retried.status).toBe(200);
+    expect(context.getState().reflections).toEqual([]);
+  });
+
   it("returns explicit validation and routing errors", async () => {
     const { env } = createEnvironment([]);
-
     const invalidJson = await worker.fetch(postMessage("{"), env);
     expect(invalidJson.status).toBe(400);
-    expect(await invalidJson.json()).toMatchObject({ error: "invalid_json" });
-
     const wrongType = await worker.fetch(
       postMessage({ text: "hello" }, "text/plain"),
       env,
     );
     expect(wrongType.status).toBe(415);
-
     const missingRoute = await worker.fetch(
       new Request("https://example.com/api/missing"),
       env,

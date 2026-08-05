@@ -1,6 +1,8 @@
 const chat = document.getElementById("chat");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
+const exportButton = document.getElementById("export-data");
+const deleteButton = document.getElementById("delete-data");
 
 function addMessage(role, text, meta = "") {
   const div = document.createElement("div");
@@ -77,7 +79,7 @@ form.addEventListener("submit", async (e) => {
     const data = await requestJson("/api/message", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text, sessionId: "demo-user" }),
+      body: JSON.stringify({ text }),
     });
 
     const meta =
@@ -92,6 +94,37 @@ form.addEventListener("submit", async (e) => {
     if (data.plan) renderPlan(data.plan);
   } catch (err) {
     addMessage("bot", `⚠️ error: ${err.message}`);
+  }
+});
+
+exportButton.addEventListener("click", async () => {
+  try {
+    const data = await requestJson("/api/data");
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "life-navigator-data.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  } catch (err) {
+    addMessage("system", `error exporting data: ${err.message}`);
+  }
+});
+
+deleteButton.addEventListener("click", async () => {
+  const confirmed = window.confirm(
+    "Delete your persona, plan, and stored reflections? This cannot be undone.",
+  );
+  if (!confirmed) return;
+
+  try {
+    await requestJson("/api/data", { method: "DELETE" });
+    chat.replaceChildren();
+    addMessage("system", "Your stored Life Navigator data was deleted.");
+  } catch (err) {
+    addMessage("system", `error deleting data: ${err.message}`);
   }
 });
 
