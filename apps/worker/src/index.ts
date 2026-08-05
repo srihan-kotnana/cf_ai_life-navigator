@@ -10,12 +10,7 @@ import {
   retrieveRelevantReflections,
   type ReflectionMemoryRecord,
 } from "./memory";
-import {
-  generatePlan,
-  parsePlanResponse,
-  type AIClient,
-  type Plan,
-} from "./planning";
+import { generatePlan, parsePlanResponse, type AIClient, type Plan } from "./planning";
 
 type MessageKind = "reflection" | "plan_request" | "other";
 
@@ -107,11 +102,7 @@ export function parseIntentResponse(result: unknown): Intent {
   return { kind, mood };
 }
 
-async function handleMessage(
-  req: Request,
-  env: Env,
-  user: AuthenticatedUser,
-) {
+async function handleMessage(req: Request, env: Env, user: AuthenticatedUser) {
   await enforceRateLimit(env.AI_RATE_LIMITER, user.id, "ai");
   const { text } = await readMessage(req);
   const stub = getUserStub(env, user.id);
@@ -261,9 +252,7 @@ async function handleRequest(req: Request, env: Env) {
     const state = (await (
       await getUserStub(env, user.id).fetch("https://do/load")
     ).json()) as { plan?: unknown };
-    return json(
-      state.plan ?? { note: "No plan yet. Ask for one to get started." },
-    );
+    return json(state.plan ?? { note: "No plan yet. Ask for one to get started." });
   }
 
   if (req.method === "GET" && url.pathname === "/api/data") {
@@ -273,9 +262,9 @@ async function handleRequest(req: Request, env: Env) {
 
   if (req.method === "DELETE" && url.pathname === "/api/data") {
     const stub = getUserStub(env, user.id);
-    const snapshot = (await (
-      await stub.fetch("https://do/vector-ids")
-    ).json()) as { vectorIds?: string[] };
+    const snapshot = (await (await stub.fetch("https://do/vector-ids")).json()) as {
+      vectorIds?: string[];
+    };
     if (snapshot.vectorIds?.length) {
       await env.VECTOR_INDEX.deleteByIds(snapshot.vectorIds);
     }
@@ -368,7 +357,7 @@ async function readMessage(req: Request) {
   return { text };
 }
 
-function parseObject(value: unknown): Record<string, any> | null {
+function parseObject(value: unknown): Record<string, unknown> | null {
   if (isObject(value)) return value;
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -381,7 +370,7 @@ function parseObject(value: unknown): Record<string, any> | null {
   }
 }
 
-function isObject(value: unknown): value is Record<string, any> {
+function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 

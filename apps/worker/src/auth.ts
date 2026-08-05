@@ -28,10 +28,7 @@ export type AccessTokenVerifier = (
   audience: string,
 ) => Promise<JWTPayload>;
 
-const keySets = new Map<
-  string,
-  ReturnType<typeof createRemoteJWKSet>
->();
+const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 export async function authenticateRequest(
   request: Request,
@@ -54,11 +51,7 @@ export async function authenticateRequest(
   }
 
   if (mode !== "access") {
-    throw new AuthError(
-      503,
-      "auth_not_configured",
-      "Authentication mode is invalid.",
-    );
+    throw new AuthError(503, "auth_not_configured", "Authentication mode is invalid.");
   }
 
   const teamDomain = normalizeTeamDomain(env.TEAM_DOMAIN);
@@ -105,16 +98,10 @@ export async function authenticateRequest(
   };
 }
 
-async function verifyAccessToken(
-  token: string,
-  teamDomain: string,
-  audience: string,
-) {
+async function verifyAccessToken(token: string, teamDomain: string, audience: string) {
   let keySet = keySets.get(teamDomain);
   if (!keySet) {
-    keySet = createRemoteJWKSet(
-      new URL(`${teamDomain}/cdn-cgi/access/certs`),
-    );
+    keySet = createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`));
     keySets.set(teamDomain, keySet);
   }
 
@@ -150,7 +137,10 @@ function normalizeTeamDomain(value?: string) {
     url.protocol !== "https:" ||
     !url.hostname.endsWith(".cloudflareaccess.com") ||
     url.pathname !== "/" ||
-    Boolean(url.username || url.password || url.search || url.hash)
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
   ) {
     throw new AuthError(
       503,

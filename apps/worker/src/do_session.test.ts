@@ -4,9 +4,7 @@ import { SessionDO } from "./do_session";
 const SAMPLE_PLAN = {
   summary: "A refreshed plan.",
   weekStart: "Monday",
-  days: [
-    { day: "Monday", focus: "Focus", tasks: ["One important task"] },
-  ],
+  days: [{ day: "Monday", focus: "Focus", tasks: ["One important task"] }],
 };
 
 class MemoryStorage {
@@ -41,9 +39,8 @@ class MemoryStorage {
 function createSession(aiResponses: unknown[] = []) {
   const storage = new MemoryStorage();
   const state = { storage } as unknown as DurableObjectState;
-  const run = vi.fn(
-    async (_model: string, _input: Record<string, unknown>) =>
-      aiResponses.shift(),
+  const run = vi.fn(async (_model: string, _input: Record<string, unknown>) =>
+    aiResponses.shift(),
   );
   const query = vi.fn(async () => ({ matches: [], count: 0 }));
   const deleteByIds = vi.fn(async () => ({ mutationId: "delete" }));
@@ -51,7 +48,7 @@ function createSession(aiResponses: unknown[] = []) {
     AI: { run },
     MODEL: "test-model",
     VECTOR_INDEX: { query, deleteByIds },
-  } as any;
+  } as unknown as ConstructorParameters<typeof SessionDO>[1];
   return {
     session: new SessionDO(state, env),
     storage,
@@ -78,9 +75,7 @@ describe("SessionDO privacy lifecycle", () => {
   it("expires reflections older than 90 days", async () => {
     const { session } = createSession();
     const now = Date.now();
-    await session.fetch(
-      reflectionRequest("old", now - 91 * 24 * 60 * 60 * 1_000),
-    );
+    await session.fetch(reflectionRequest("old", now - 91 * 24 * 60 * 60 * 1_000));
     const response = await session.fetch(reflectionRequest("current", now));
     expect(await response.json()).toEqual({ pendingVectorIds: ["old"] });
   });

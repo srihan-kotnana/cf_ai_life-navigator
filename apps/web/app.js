@@ -86,8 +86,8 @@ form.addEventListener("submit", async (e) => {
       data.kind === "reflection"
         ? "🪞 emotion logged"
         : data.kind === "plan_request"
-        ? "📅 plan generated"
-        : "";
+          ? "📅 plan generated"
+          : "";
 
     addMessage("bot", data.text || "(no response)", meta);
 

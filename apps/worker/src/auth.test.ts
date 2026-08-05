@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { authenticateRequest, AuthError } from "./auth";
+import { authenticateRequest, type AuthError } from "./auth";
 
 describe("authenticateRequest", () => {
   it("derives a stable, non-reversible development user ID", async () => {

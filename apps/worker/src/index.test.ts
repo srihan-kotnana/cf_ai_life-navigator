@@ -18,11 +18,21 @@ const SAMPLE_PLAN = {
   ],
 };
 
+interface StoredReflection extends Record<string, unknown> {
+  id: string;
+}
+
+interface TestState {
+  persona: Record<string, unknown>;
+  plan: unknown;
+  reflections: StoredReflection[];
+}
+
 function createEnvironment(
   aiResponses: unknown[],
   options: { allowApi?: boolean; allowAi?: boolean } = {},
 ) {
-  let state: Record<string, any> = {
+  let state: TestState = {
     persona: { mood: "neutral" },
     plan: null,
     reflections: [],
@@ -49,16 +59,15 @@ function createEnvironment(
       if (url.pathname === "/save-persona") state.persona = body;
       if (url.pathname === "/save-plan") state.plan = body;
       if (url.pathname === "/record-reflection") {
-        state.reflections.push(body);
+        state.reflections.push(body as StoredReflection);
         return Response.json({ pendingVectorIds: [] });
       }
       return Response.json({ ok: true });
     },
   };
 
-  const run = vi.fn(
-    async (_model: string, _input: Record<string, unknown>) =>
-      aiResponses.shift(),
+  const run = vi.fn(async (_model: string, _input: Record<string, unknown>) =>
+    aiResponses.shift(),
   );
   const upsert = vi.fn(async (_vectors: VectorizeVector[]) => ({
     mutationId: "upsert",
@@ -161,10 +170,7 @@ describe("authenticated message API", () => {
       { response: { kind: "plan_request", mood: 0.5 } },
       { response: SAMPLE_PLAN },
     ]);
-    const response = await worker.fetch(
-      postMessage({ text: "Plan my week" }),
-      env,
-    );
+    const response = await worker.fetch(postMessage({ text: "Plan my week" }), env);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       kind: "plan_request",
@@ -207,10 +213,7 @@ describe("authenticated message API", () => {
       { response: { kind: "other", mood: 0.5 } },
       { response: "Let’s work through that together." },
     ]);
-    const response = await worker.fetch(
-      postMessage({ text: "Help me think" }),
-      env,
-    );
+    const response = await worker.fetch(postMessage({ text: "Help me think" }), env);
     expect(await response.json()).toEqual({
       kind: "other",
       text: "Let’s work through that together.",
@@ -257,10 +260,7 @@ describe("authenticated message API", () => {
     expect(generalResponse.headers.get("retry-after")).toBe("60");
 
     const ai = createEnvironment([], { allowAi: false });
-    const aiResponse = await worker.fetch(
-      postMessage({ text: "hello" }),
-      ai.env,
-    );
+    const aiResponse = await worker.fetch(postMessage({ text: "hello" }), ai.env);
     expect(aiResponse.status).toBe(429);
     expect(ai.run).not.toHaveBeenCalled();
   });
@@ -296,7 +296,10 @@ describe("authenticated message API", () => {
       { response: { kind: "reflection", mood: 0.4 } },
       { data: [[0.1, 0.2]] },
     ]);
-    await worker.fetch(postMessage({ text: "Keep this until deletion succeeds" }), context.env);
+    await worker.fetch(
+      postMessage({ text: "Keep this until deletion succeeds" }),
+      context.env,
+    );
     context.deleteByIds.mockRejectedValueOnce(new Error("temporary failure"));
 
     const failed = await worker.fetch(

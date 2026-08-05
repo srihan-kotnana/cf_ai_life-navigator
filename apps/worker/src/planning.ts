@@ -54,11 +54,7 @@ interface PlanContext {
   request: string;
 }
 
-export async function generatePlan(
-  ai: AIClient,
-  model: string,
-  context: PlanContext,
-) {
+export async function generatePlan(ai: AIClient, model: string, context: PlanContext) {
   const result = await ai.run(model, {
     messages: [
       {
@@ -130,7 +126,7 @@ function unwrapAIResponse(result: unknown): unknown {
   );
 }
 
-function parseObject(value: unknown): Record<string, any> | null {
+function parseObject(value: unknown): Record<string, unknown> | null {
   if (isObject(value)) return value;
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -143,6 +139,6 @@ function parseObject(value: unknown): Record<string, any> | null {
   }
 }
 
-function isObject(value: unknown): value is Record<string, any> {
+function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

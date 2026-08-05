@@ -3,13 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "wrangler dev",
+    "format": "biome format --write src ../web package.json tsconfig.json ../../biome.json",
+    "format:check": "biome format src ../web package.json tsconfig.json ../../biome.json",
+    "lint": "biome lint src ../web",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "wrangler deploy --dry-run"
+    "build": "wrangler deploy --dry-run",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.7",
     "@cloudflare/workers-types": "5.20260804.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10",

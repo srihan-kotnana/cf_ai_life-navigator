@@ -21,7 +21,7 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 ```bash
 git clone https://github.com/srihan-kotnana/cf_ai_life-navigator.git
 cd cf_ai_life-navigator/apps/worker
-npm install
+npm ci
 npm run dev
 ```
 
@@ -30,10 +30,13 @@ The Worker serves both the web app and its `/api/*` routes from the same origin.
 ### validation
 
 ```bash
-npm test
-npm run typecheck
-npm run build
+npm run check
 ```
+
+`npm run check` verifies formatting, lint rules, TypeScript types, tests, and a
+dry-run Worker build. The same command runs for every push and pull request in
+GitHub Actions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development
+workflow.
 
 ## authentication and privacy
 

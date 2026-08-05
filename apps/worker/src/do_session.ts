@@ -1,7 +1,4 @@
-import {
-  retrieveRelevantReflections,
-  type ReflectionMemoryRecord,
-} from "./memory";
+import { retrieveRelevantReflections, type ReflectionMemoryRecord } from "./memory";
 import { generatePlan, type AIClient } from "./planning";
 
 const MAX_REFLECTIONS = 50;
@@ -92,9 +89,7 @@ export class SessionDO {
       const records = await this.getReflectionRecords();
       const pending = await this.getPendingVectorDeletes();
       return Response.json({
-        vectorIds: [
-          ...new Set([...records.map((record) => record.id), ...pending]),
-        ],
+        vectorIds: [...new Set([...records.map((record) => record.id), ...pending])],
       });
     }
 
@@ -134,8 +129,8 @@ export class SessionDO {
       await this.queueVectorDeletes(expiredIds);
       await this.flushPendingVectorDeletes();
 
-      const usableRecords = retained.filter(
-        (record) => Boolean(record.namespace && record.text),
+      const usableRecords = retained.filter((record) =>
+        Boolean(record.namespace && record.text),
       );
       if (usableRecords.length === 0) {
         await this.storage.deleteAlarm();
@@ -168,8 +163,7 @@ export class SessionDO {
   }
 
   private async loadState() {
-    const persona =
-      (await this.storage.get("persona")) ?? defaultPersona();
+    const persona = (await this.storage.get("persona")) ?? defaultPersona();
     const plan = (await this.storage.get("plan")) ?? null;
     const reflections = await this.getReflectionRecords();
     return { persona, plan, reflections };
@@ -181,10 +175,7 @@ export class SessionDO {
 
     const records: ReflectionMemoryRecord[] = [];
     for (const candidate of value) {
-      if (
-        !candidate ||
-        typeof candidate !== "object"
-      ) {
+      if (!candidate || typeof candidate !== "object") {
         continue;
       }
       const record = candidate as Record<string, unknown>;
@@ -192,11 +183,11 @@ export class SessionDO {
         typeof record.id !== "string" ||
         typeof record.createdAt !== "number" ||
         !Number.isFinite(record.createdAt)
-      ) continue;
+      )
+        continue;
       records.push({
         id: record.id,
-        namespace:
-          typeof record.namespace === "string" ? record.namespace : "",
+        namespace: typeof record.namespace === "string" ? record.namespace : "",
         text: typeof record.text === "string" ? record.text : "",
         mood:
           typeof record.mood === "number" && Number.isFinite(record.mood)
@@ -215,9 +206,7 @@ export class SessionDO {
   }
 
   private async queueVectorDeletes(ids: string[]) {
-    const pending = [
-      ...new Set([...(await this.getPendingVectorDeletes()), ...ids]),
-    ];
+    const pending = [...new Set([...(await this.getPendingVectorDeletes()), ...ids])];
     await this.storage.put("pendingVectorDeletes", pending);
     return pending;
   }
