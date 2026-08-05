@@ -30,7 +30,11 @@ interface TestState {
 
 function createEnvironment(
   aiResponses: unknown[],
-  options: { allowApi?: boolean; allowAi?: boolean } = {},
+  options: {
+    allowApi?: boolean;
+    allowAi?: boolean;
+    recordReflectionStatus?: number;
+  } = {},
 ) {
   let state: TestState = {
     persona: { mood: "neutral" },
@@ -59,6 +63,12 @@ function createEnvironment(
       if (url.pathname === "/save-persona") state.persona = body;
       if (url.pathname === "/save-plan") state.plan = body;
       if (url.pathname === "/record-reflection") {
+        if (options.recordReflectionStatus) {
+          return Response.json(
+            { error: "persistence_failed" },
+            { status: options.recordReflectionStatus },
+          );
+        }
         state.reflections.push(body as StoredReflection);
         return Response.json({ pendingVectorIds: [] });
       }
@@ -163,6 +173,28 @@ describe("authenticated message API", () => {
     expect(userId).not.toBe("attacker");
     expect(upsert.mock.calls[0][0][0]).toMatchObject({ namespace: userId });
     expect(getState().persona).toMatchObject({ mood: "low" });
+  });
+
+  it("removes a new vector when Durable Object persistence fails", async () => {
+    const context = createEnvironment(
+      [{ response: { kind: "reflection", mood: 0.1 } }, { data: [[0.1, 0.2]] }],
+      { recordReflectionStatus: 503 },
+    );
+
+    const response = await worker.fetch(
+      postMessage({ text: "This write should be compensated" }),
+      context.env,
+    );
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: "reflection_persistence_failed",
+      message: "The reflection could not be saved right now.",
+    });
+    const vectorId = context.upsert.mock.calls[0][0][0].id;
+    expect(context.deleteByIds).toHaveBeenCalledWith([vectorId]);
+    expect(context.getState().reflections).toEqual([]);
+    expect(context.getState().persona).toEqual({ mood: "neutral" });
   });
 
   it("generates and saves a schema-backed plan", async () => {

@@ -155,8 +155,9 @@ async function handleMessage(req: Request, env: Env, user: AuthenticatedUser) {
       },
     ]);
 
-    const recordResult = (await (
-      await stub.fetch("https://do/record-reflection", {
+    let recordResult: { pendingVectorIds?: string[] };
+    try {
+      const recordResponse = await stub.fetch("https://do/record-reflection", {
         method: "POST",
         body: JSON.stringify({
           id: vectorId,
@@ -165,8 +166,31 @@ async function handleMessage(req: Request, env: Env, user: AuthenticatedUser) {
           mood: intent.mood,
           createdAt,
         }),
-      })
-    ).json()) as { pendingVectorIds?: string[] };
+      });
+      if (!recordResponse.ok) {
+        throw new Error(
+          `Durable Object rejected reflection (${recordResponse.status}).`,
+        );
+      }
+      recordResult = (await recordResponse.json()) as {
+        pendingVectorIds?: string[];
+      };
+    } catch {
+      try {
+        await env.VECTOR_INDEX.deleteByIds([vectorId]);
+      } catch (cleanupError) {
+        console.error("Reflection vector compensation failed", {
+          vectorId,
+          error: cleanupError instanceof Error ? cleanupError.message : "unknown_error",
+        });
+      }
+      throw new HttpError(
+        502,
+        "reflection_persistence_failed",
+        "The reflection could not be saved right now.",
+      );
+    }
+
     if (recordResult.pendingVectorIds?.length) {
       await env.VECTOR_INDEX.deleteByIds(recordResult.pendingVectorIds);
       await stub.fetch("https://do/ack-vector-deletes", {
