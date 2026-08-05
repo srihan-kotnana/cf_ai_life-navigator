@@ -56,12 +56,22 @@ function createEnvironment(
     },
   };
 
-  const run = vi.fn(async () => aiResponses.shift());
+  const run = vi.fn(
+    async (_model: string, _input: Record<string, unknown>) =>
+      aiResponses.shift(),
+  );
   const upsert = vi.fn(async (_vectors: VectorizeVector[]) => ({
     mutationId: "upsert",
   }));
   const deleteByIds = vi.fn(async (_ids: string[]) => ({
     mutationId: "delete",
+  }));
+  const query = vi.fn(async () => ({
+    matches: state.reflections.map((item: { id: string }) => ({
+      id: item.id,
+      score: 0.9,
+    })),
+    count: state.reflections.length,
   }));
   const idFromName = vi.fn((_name: string) => "test-id");
   const apiLimit = vi.fn(async () => ({ success: options.allowApi ?? true }));
@@ -71,7 +81,7 @@ function createEnvironment(
     DEV_USER_ID: "test-user",
     AI: { run },
     MODEL: "test-model",
-    VECTOR_INDEX: { upsert, deleteByIds },
+    VECTOR_INDEX: { upsert, deleteByIds, query },
     API_RATE_LIMITER: { limit: apiLimit },
     AI_RATE_LIMITER: { limit: aiLimit },
     SESSION_DO: {
@@ -85,6 +95,7 @@ function createEnvironment(
     run,
     upsert,
     deleteByIds,
+    query,
     idFromName,
     apiLimit,
     aiLimit,
@@ -161,6 +172,34 @@ describe("authenticated message API", () => {
       plan: SAMPLE_PLAN,
     });
     expect(getState().plan).toEqual(SAMPLE_PLAN);
+  });
+
+  it("retrieves the user's reflection text for plan generation", async () => {
+    const context = createEnvironment([
+      { response: { kind: "reflection", mood: 0.3 } },
+      { data: [[0.1, 0.2]] },
+      { response: { kind: "plan_request", mood: 0.5 } },
+      { data: [[0.3, 0.4]] },
+      { response: SAMPLE_PLAN },
+    ]);
+
+    await worker.fetch(
+      postMessage({ text: "I need time for a private family commitment" }),
+      context.env,
+    );
+    const planResponse = await worker.fetch(
+      postMessage({ text: "Plan around my commitments" }),
+      context.env,
+    );
+
+    expect(planResponse.status).toBe(200);
+    expect(context.query).toHaveBeenCalledWith(
+      [0.3, 0.4],
+      expect.objectContaining({ namespace: expect.stringMatching(/^u_/) }),
+    );
+    expect(JSON.stringify(context.run.mock.calls[4]?.[1])).toContain(
+      "private family commitment",
+    );
   });
 
   it("returns normalized conversational replies", async () => {

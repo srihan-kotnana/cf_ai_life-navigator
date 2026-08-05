@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionDO } from "./do_session";
+
+const SAMPLE_PLAN = {
+  summary: "A refreshed plan.",
+  weekStart: "Monday",
+  days: [
+    { day: "Monday", focus: "Focus", tasks: ["One important task"] },
+  ],
+};
 
 class MemoryStorage {
   values = new Map<string, unknown>();
+  alarmTime: number | null = null;
 
   async get<T>(key: string): Promise<T | undefined> {
     return this.values.get(key) as T | undefined;
@@ -15,18 +24,53 @@ class MemoryStorage {
   async deleteAll() {
     this.values.clear();
   }
+
+  async getAlarm() {
+    return this.alarmTime;
+  }
+
+  async setAlarm(timestamp: number) {
+    this.alarmTime = timestamp;
+  }
+
+  async deleteAlarm() {
+    this.alarmTime = null;
+  }
 }
 
-function createSession() {
+function createSession(aiResponses: unknown[] = []) {
   const storage = new MemoryStorage();
   const state = { storage } as unknown as DurableObjectState;
-  return { session: new SessionDO(state), storage };
+  const run = vi.fn(
+    async (_model: string, _input: Record<string, unknown>) =>
+      aiResponses.shift(),
+  );
+  const query = vi.fn(async () => ({ matches: [], count: 0 }));
+  const deleteByIds = vi.fn(async () => ({ mutationId: "delete" }));
+  const env = {
+    AI: { run },
+    MODEL: "test-model",
+    VECTOR_INDEX: { query, deleteByIds },
+  } as any;
+  return {
+    session: new SessionDO(state, env),
+    storage,
+    run,
+    query,
+    deleteByIds,
+  };
 }
 
 function reflectionRequest(id: string, createdAt: number) {
   return new Request("https://do/record-reflection", {
     method: "POST",
-    body: JSON.stringify({ id, createdAt }),
+    body: JSON.stringify({
+      id,
+      namespace: "u_test",
+      text: `reflection ${id}`,
+      mood: 0.5,
+      createdAt,
+    }),
   });
 }
 
@@ -42,7 +86,7 @@ describe("SessionDO privacy lifecycle", () => {
   });
 
   it("caps reflection records and returns all IDs during deletion", async () => {
-    const { session } = createSession();
+    const { session, storage } = createSession();
     const now = Date.now();
     let expired: string[] = [];
     for (let index = 0; index < 51; index += 1) {
@@ -80,10 +124,30 @@ describe("SessionDO privacy lifecycle", () => {
     ).toHaveLength(50);
 
     await session.fetch(new Request("https://do/reset", { method: "DELETE" }));
+    expect(storage.alarmTime).toBeNull();
 
     const loaded = await session.fetch(new Request("https://do/load"));
     expect(((await loaded.json()) as { reflections: unknown[] }).reflections).toEqual(
       [],
     );
+  });
+
+  it("refreshes the plan through a per-user alarm and reschedules", async () => {
+    const { session, storage, query } = createSession([
+      { data: [[0.2, 0.4]] },
+      { response: SAMPLE_PLAN },
+    ]);
+    const now = Date.now();
+    await session.fetch(reflectionRequest("reflection-for-plan", now));
+    expect(storage.alarmTime).toBeGreaterThan(now);
+
+    await session.alarm();
+
+    expect(query).toHaveBeenCalledWith(
+      [0.2, 0.4],
+      expect.objectContaining({ namespace: "u_test" }),
+    );
+    expect(storage.values.get("plan")).toEqual(SAMPLE_PLAN);
+    expect(storage.alarmTime).toBeGreaterThan(Date.now());
   });
 });

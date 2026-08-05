@@ -5,28 +5,23 @@ import {
   type AuthenticatedUser,
 } from "./auth";
 import { SessionDO } from "./do_session";
+import {
+  EMBEDDING_MODEL,
+  retrieveRelevantReflections,
+  type ReflectionMemoryRecord,
+} from "./memory";
+import {
+  generatePlan,
+  parsePlanResponse,
+  type AIClient,
+  type Plan,
+} from "./planning";
 
 type MessageKind = "reflection" | "plan_request" | "other";
 
 interface Intent {
   kind: MessageKind;
   mood: number;
-}
-
-interface PlanDay {
-  day: string;
-  focus: string;
-  tasks: string[];
-}
-
-export interface Plan {
-  summary: string;
-  weekStart: string;
-  days: PlanDay[];
-}
-
-interface AIClient {
-  run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface Env extends AuthEnv {
@@ -59,35 +54,6 @@ const INTENT_SCHEMA = {
     mood: { type: "number", minimum: 0, maximum: 1 },
   },
   required: ["kind", "mood"],
-  additionalProperties: false,
-};
-
-const PLAN_SCHEMA = {
-  type: "object",
-  properties: {
-    summary: { type: "string" },
-    weekStart: { type: "string" },
-    days: {
-      type: "array",
-      minItems: 1,
-      maxItems: 7,
-      items: {
-        type: "object",
-        properties: {
-          day: { type: "string" },
-          focus: { type: "string" },
-          tasks: {
-            type: "array",
-            items: { type: "string" },
-            maxItems: 8,
-          },
-        },
-        required: ["day", "focus", "tasks"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["summary", "weekStart", "days"],
   additionalProperties: false,
 };
 
@@ -141,45 +107,6 @@ export function parseIntentResponse(result: unknown): Intent {
   return { kind, mood };
 }
 
-export function parsePlanResponse(result: unknown): Plan | null {
-  const value = parseObject(unwrapAIResponse(result));
-  if (
-    !value ||
-    typeof value.summary !== "string" ||
-    typeof value.weekStart !== "string" ||
-    !Array.isArray(value.days) ||
-    value.days.length === 0 ||
-    value.days.length > 7
-  ) {
-    return null;
-  }
-
-  const days: PlanDay[] = [];
-  for (const candidate of value.days) {
-    if (
-      !candidate ||
-      typeof candidate !== "object" ||
-      typeof candidate.day !== "string" ||
-      typeof candidate.focus !== "string" ||
-      !Array.isArray(candidate.tasks) ||
-      !candidate.tasks.every((task: unknown) => typeof task === "string")
-    ) {
-      return null;
-    }
-    days.push({
-      day: candidate.day,
-      focus: candidate.focus,
-      tasks: candidate.tasks,
-    });
-  }
-
-  return {
-    summary: value.summary,
-    weekStart: value.weekStart,
-    days,
-  };
-}
-
 async function handleMessage(
   req: Request,
   env: Env,
@@ -191,6 +118,7 @@ async function handleMessage(
   const state = (await (await stub.fetch("https://do/load")).json()) as {
     persona: unknown;
     plan: unknown;
+    reflections: ReflectionMemoryRecord[];
   };
 
   const classification = await env.AI.run(env.MODEL, {
@@ -213,7 +141,7 @@ async function handleMessage(
   const intent = parseIntentResponse(classification);
 
   if (intent.kind === "reflection") {
-    const embedding = (await env.AI.run("@cf/baai/bge-large-en-v1.5", {
+    const embedding = (await env.AI.run(EMBEDDING_MODEL, {
       text,
     })) as { data?: number[][] };
     const values = embedding.data?.[0];
@@ -239,7 +167,13 @@ async function handleMessage(
     const recordResult = (await (
       await stub.fetch("https://do/record-reflection", {
         method: "POST",
-        body: JSON.stringify({ id: vectorId, createdAt }),
+        body: JSON.stringify({
+          id: vectorId,
+          namespace: user.id,
+          text,
+          mood: intent.mood,
+          createdAt,
+        }),
       })
     ).json()) as { pendingVectorIds?: string[] };
     if (recordResult.pendingVectorIds?.length) {
@@ -263,31 +197,19 @@ async function handleMessage(
   }
 
   if (intent.kind === "plan_request") {
-    const result = await env.AI.run(env.MODEL, {
-      messages: [
-        {
-          role: "system",
-          content:
-            "Create a realistic plan from the supplied persona, previous plan, and request.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            persona: state.persona,
-            previousPlan: state.plan,
-            request: text,
-          }),
-        },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: PLAN_SCHEMA,
-      },
-      max_tokens: 900,
-      temperature: 0.5,
+    const reflections = await retrieveRelevantReflections(
+      env.AI,
+      env.VECTOR_INDEX,
+      user.id,
+      text,
+      state.reflections,
+    );
+    const plan = await generatePlan(env.AI, env.MODEL, {
+      persona: state.persona,
+      previousPlan: state.plan,
+      reflections,
+      request: text,
     });
-
-    const plan = parsePlanResponse(result);
     if (!plan) {
       throw new HttpError(
         502,
@@ -469,4 +391,5 @@ function labelMood(value: number) {
   return "high";
 }
 
-export { SessionDO };
+export { parsePlanResponse, SessionDO };
+export type { Plan };

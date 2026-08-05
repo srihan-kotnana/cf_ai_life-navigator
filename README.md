@@ -11,7 +11,7 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 - uses **Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) for all reasoning
 - embeddings stored in **Vectorize Index**
 - includes local + deployed UI
-- supports mood reflections and plan updates automatically via scheduled tasks
+- supports mood reflections and per-user plan refreshes via Durable Object alarms
 
 ---
 
@@ -58,7 +58,9 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Reflections are isolated by user, limited to 50 records, and retained for at most
-90 days when new reflections are recorded. The web app provides data export and
-deletion controls. API requests and AI calls are rate-limited per authenticated
-user.
+Reflection text is stored in the user's Durable Object and its embedding is kept
+in that user's Vectorize namespace. Plans retrieve only matching records from that
+namespace. Reflections are limited to 50 records and retained for at most 90 days;
+a per-user Durable Object alarm refreshes plans and applies retention daily. The
+web app provides data export and deletion controls. API requests and AI calls are
+rate-limited per authenticated user.
