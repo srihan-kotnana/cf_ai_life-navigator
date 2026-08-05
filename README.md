@@ -11,6 +11,7 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 - uses **Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) for all reasoning
 - embeddings stored in **Vectorize Index**
 - includes local + deployed UI
+- presents plans as a responsive, keyboard-accessible weekly workspace
 - supports mood reflections and per-user plan refreshes via Durable Object alarms
 
 ---
@@ -22,6 +23,7 @@ The app logs reflections, generates mood-aware weekly plans, and responds conver
 git clone https://github.com/srihan-kotnana/cf_ai_life-navigator.git
 cd cf_ai_life-navigator/apps/worker
 npm ci
+cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
@@ -37,6 +39,17 @@ npm run check
 dry-run Worker build. The same command runs for every push and pull request in
 GitHub Actions. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development
 workflow.
+
+## free deployment
+
+This project can run entirely within Cloudflare's Free plans. A custom domain is
+not required: Cloudflare includes a free `workers.dev` subdomain for Workers
+accounts. Do not purchase a domain or select Workers Paid during setup.
+
+Follow [`DEPLOYMENT.md`](DEPLOYMENT.md) for the free-only provisioning and release
+checklist. Free usage is capped by Cloudflare; when an allocation is exhausted,
+requests fail instead of creating paid overage while the account remains on the
+Free plan.
 
 ## authentication and privacy
 
@@ -54,7 +67,9 @@ wrangler secret put POLICY_AUD
 validates the `Cf-Access-Jwt-Assertion` signature, issuer, and audience before
 deriving a non-reversible per-user storage identifier.
 
-For local development only:
+The setup step creates an ignored local-only development identity from
+`.dev.vars.example`. Never use development authentication in a deployed Worker.
+To recreate it:
 
 ```bash
 cp .dev.vars.example .dev.vars

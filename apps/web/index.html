@@ -1,24 +1,105 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>life navigator</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <main>
-    <h1>🧭 life navigator</h1>
-    <div id="chat"></div>
-    <form id="form">
-      <input id="input" placeholder="dump your thoughts or ask for a plan…" />
-      <button type="submit">send</button>
-    </form>
-    <div class="privacy-actions">
-      <button id="export-data" type="button">export my data</button>
-      <button id="delete-data" class="danger" type="button">delete my data</button>
-    </div>
-  </main>
-  <script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="A private, AI-assisted workspace for reflection and realistic weekly planning."
+    />
+    <meta name="theme-color" content="#0d0f0d" />
+    <title>Life Navigator — Reflect and plan with context</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <div>
+            <p class="brand-name">life navigator</p>
+            <p class="brand-note">Private planning workspace</p>
+          </div>
+        </div>
+
+        <div id="app-status" class="status" data-state="loading" role="status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">Connecting</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-labelledby="workspace-title">
+        <div class="workspace-intro">
+          <div>
+            <p class="eyebrow">Today’s workspace</p>
+            <h1 id="workspace-title">Make room for what matters.</h1>
+          </div>
+          <p>
+            Share what is on your mind, capture a reflection, or ask for a realistic
+            plan shaped by your recent context.
+          </p>
+        </div>
+
+        <div
+          id="chat"
+          class="conversation"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-label="Conversation with Life Navigator"
+        >
+          <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+            <p class="eyebrow">Start with what is real</p>
+            <h2 id="empty-title">What needs your attention?</h2>
+            <p>There is no perfect prompt. A sentence is enough.</p>
+            <fieldset class="prompt-list">
+              <legend class="sr-only">Suggested prompts</legend>
+              <button type="button" data-prompt="Help me plan a realistic week.">
+                Plan a realistic week <span aria-hidden="true">↗</span>
+              </button>
+              <button type="button" data-prompt="I want to reflect on how today went.">
+                Log today’s reflection <span aria-hidden="true">↗</span>
+              </button>
+              <button type="button" data-prompt="Help me decide what to prioritize next.">
+                Sort out my priorities <span aria-hidden="true">↗</span>
+              </button>
+            </fieldset>
+          </section>
+        </div>
+
+        <form id="form" class="composer-form">
+          <label class="sr-only" for="input">Message Life Navigator</label>
+          <div class="composer">
+            <textarea
+              id="input"
+              name="message"
+              rows="1"
+              maxlength="4000"
+              placeholder="Share a reflection or ask for a plan…"
+              aria-describedby="composer-hint character-count"
+            ></textarea>
+            <button id="send" type="submit" aria-label="Send message">
+              <span>Send</span><span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <div class="composer-meta">
+            <span id="composer-hint">Enter to send · Shift + Enter for a new line</span>
+            <span id="character-count">0 / 4,000</span>
+          </div>
+        </form>
+      </section>
+
+      <footer class="data-controls">
+        <div>
+          <p>Your workspace belongs to you.</p>
+          <p>Download a copy or permanently remove stored data at any time.</p>
+        </div>
+        <div class="data-actions">
+          <button id="export-data" type="button">Export data</button>
+          <button id="delete-data" class="danger" type="button">Delete data</button>
+        </div>
+      </footer>
+    </main>
+    <script src="app.js"></script>
+  </body>
 </html>
